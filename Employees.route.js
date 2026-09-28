@@ -24,7 +24,7 @@ async function sendCredentials({ email, name, id, password }) {
     },
     body: JSON.stringify({
       sender: {
-        name: process.env.BREVO_SENDER_NAME || 'HRM System',
+        name: process.env.BREVO_SENDER_NAME || 'Chivalry Real Estate Development',
         email: process.env.BREVO_SENDER_EMAIL, // dapat verified sa Brevo
       },
       to: [{ email, name }],
