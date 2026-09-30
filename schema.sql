@@ -47,3 +47,33 @@ CREATE TABLE IF NOT EXISTS cash_advance_requests (
   INDEX idx_employee (employee_id),
   INDEX idx_status (status)
 );
+
+-- NEW: claimed payslips (one per employee per pay period)
+CREATE TABLE IF NOT EXISTS payslips (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  employee_id      VARCHAR(50)  NOT NULL,
+  employee_name    VARCHAR(255) NOT NULL,
+  department       VARCHAR(100) NULL,
+  period_id        VARCHAR(30)  NOT NULL,
+  period_label     VARCHAR(100) NOT NULL,
+  period_start     DATE NOT NULL,
+  period_end       DATE NOT NULL,
+  salary_type      VARCHAR(20)  NOT NULL,
+  days_present     DECIMAL(6,2)  NOT NULL DEFAULT 0,
+  basic_pay        DECIMAL(12,2) NOT NULL DEFAULT 0,
+  premium_pay      DECIMAL(12,2) NOT NULL DEFAULT 0,
+  overtime_pay     DECIMAL(12,2) NOT NULL DEFAULT 0,
+  allowance        DECIMAL(12,2) NOT NULL DEFAULT 0,
+  gross_pay        DECIMAL(12,2) NOT NULL DEFAULT 0,
+  sss              DECIMAL(12,2) NOT NULL DEFAULT 0,
+  philhealth       DECIMAL(12,2) NOT NULL DEFAULT 0,
+  pagibig          DECIMAL(12,2) NOT NULL DEFAULT 0,
+  withholding_tax  DECIMAL(12,2) NOT NULL DEFAULT 0,
+  cash_advance     DECIMAL(12,2) NOT NULL DEFAULT 0,
+  total_deductions DECIMAL(12,2) NOT NULL DEFAULT 0,
+  net_pay          DECIMAL(12,2) NOT NULL DEFAULT 0,
+  details          JSON NULL,
+  claimed_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_employee_period (employee_id, period_id),
+  INDEX idx_period (period_id)
+);
