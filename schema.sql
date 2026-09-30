@@ -32,3 +32,18 @@ CREATE TABLE IF NOT EXISTS employees (
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS cash_advance_requests (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  employee_id VARCHAR(50) NOT NULL,
+  employee_name VARCHAR(150) NOT NULL,
+  department VARCHAR(100) NULL,
+  amount DECIMAL(10,2) NOT NULL,
+  reason VARCHAR(500) NULL,
+  repayment_months TINYINT NOT NULL DEFAULT 1,
+  status ENUM('Pending','Approved','Rejected','Cancelled') NOT NULL DEFAULT 'Pending',
+  admin_remarks VARCHAR(500) NULL,
+  date_requested TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at TIMESTAMP NULL,
+  INDEX idx_employee (employee_id),
+  INDEX idx_status (status)
+);
