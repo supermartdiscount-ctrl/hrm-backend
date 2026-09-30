@@ -3,6 +3,7 @@ const cors = require('cors');
 require('./db'); // connects to the database and logs the result
 const accountRoutes = require('./components/Account');
 const employeeRoutes = require('./components/Employee');
+const cashAdvanceRoutes = require('./components/CashAdvance');
 
 const app = express();
 app.use(cors());
@@ -14,6 +15,7 @@ app.get('/', (req, res) => {
 
 app.use(accountRoutes);
 app.use(employeeRoutes);
+app.use('/api/cash-advance', cashAdvanceRoutes);
 
 const PORT = process.env.PORT || 8081;
 app.listen(PORT, () => {

@@ -1,5 +1,5 @@
 const express = require('express');
-const pool = require('../db');
+const pool = require('../db').promise();
 const router = express.Router();
 
 const MAX_AMOUNT = 20000;
@@ -25,13 +25,19 @@ router.get('/', async (req, res) => {
 // POST /api/cash-advance
 router.post('/', async (req, res) => {
   try {
-    const { employeeId, employeeName, department, amount, reason, repaymentMonths } = req.body;
+    const { employeeId, amount, reason, repaymentMonths } = req.body;
     const amt = Number(amount);
-    if (!employeeId || !employeeName) return res.status(400).json({ error: 'Employee required' });
+
+    if (!employeeId) return res.status(400).json({ error: 'Employee required' });
     if (!(amt > 0) || amt > MAX_AMOUNT)
       return res.status(400).json({ error: `Amount must be between 1 and ${MAX_AMOUNT}` });
 
+    // Name and department come from the database, not the client
+    const [emp] = await pool.query('SELECT name, dept FROM employees WHERE id = ?', [employeeId]);
+    if (!emp.length) return res.status(404).json({ error: 'Employee not found' });
+
     const months = Math.min(Math.max(Number(repaymentMonths) || 1, 1), 12);
+
     const [pending] = await pool.query(
       "SELECT COUNT(*) AS c FROM cash_advance_requests WHERE employee_id = ? AND status = 'Pending'",
       [employeeId]);
@@ -42,8 +48,10 @@ router.post('/', async (req, res) => {
       `INSERT INTO cash_advance_requests
        (employee_id, employee_name, department, amount, reason, repayment_months)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [employeeId, employeeName, department || null, amt, (reason || '').slice(0, 500), months]);
-    const [rows] = await pool.query('SELECT * FROM cash_advance_requests WHERE id = ?', [result.insertId]);
+      [employeeId, emp[0].name, emp[0].dept || null, amt, (reason || '').slice(0, 500), months]);
+
+    const [rows] = await pool.query(
+      'SELECT * FROM cash_advance_requests WHERE id = ?', [result.insertId]);
     res.status(201).json(rows[0]);
   } catch (e) {
     console.error(e);
@@ -73,7 +81,8 @@ router.patch('/:id/cancel', async (req, res) => {
     const [r] = await pool.query(
       "UPDATE cash_advance_requests SET status = 'Cancelled' WHERE id = ? AND status = 'Pending'",
       [req.params.id]);
-    if (!r.affectedRows) return res.status(400).json({ error: 'Only pending requests can be cancelled' });
+    if (!r.affectedRows)
+      return res.status(400).json({ error: 'Only pending requests can be cancelled' });
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
