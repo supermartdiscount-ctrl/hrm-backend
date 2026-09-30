@@ -1,22 +1,29 @@
-const express = require('express');
-const pool = require('../db');
+// Paste this handler into your payslips router (routes/payslips.js).
+// It assumes the router file already has:
+//   const express = require('express');
+//   const db = require('../db').promise();
+//   const router = express.Router();
+//   const num = (v) => Number(v) || 0;   // helper used below
 
-const router = express.Router();
-const db = pool.promise();
 const num = (v) => Number(v) || 0;
 
 // Admin web: claim one payslip (saves a snapshot of the computed payroll)
+// and records each automatic cash advance installment taken in it.
 router.post('/claim', async (req, res) => {
-    const { employeeId, period, row, breakdown } = req.body || {};
+    const { employeeId, period, row, breakdown, cashAdvances } = req.body || {};
     if (!employeeId || !period?.id || !row) {
         return res.status(400).json({ error: 'employeeId, period and row are required' });
     }
+
+    const conn = await db.getConnection();
     try {
-        const [emps] = await db.query('SELECT id, name, dept FROM employees WHERE id = ?', [employeeId]);
+        const [emps] = await conn.query('SELECT id, name, dept FROM employees WHERE id = ?', [employeeId]);
         if (emps.length === 0) return res.status(404).json({ error: 'Employee not found' });
         const emp = emps[0];
 
-        const [result] = await db.query('INSERT INTO payslips SET ?', {
+        await conn.beginTransaction();
+
+        const [result] = await conn.query('INSERT INTO payslips SET ?', {
             employee_id: emp.id,
             employee_name: emp.name,
             department: emp.dept,
@@ -41,9 +48,30 @@ router.post('/claim', async (req, res) => {
             details: JSON.stringify({ row, breakdown: breakdown || [] }),
         });
 
-        const [saved] = await db.query('SELECT id, claimed_at FROM payslips WHERE id = ?', [result.insertId]);
+        // Record each automatic cash advance installment taken in this payslip.
+        // Each advance is verified: it must exist, belong to this employee and be Approved.
+        for (const c of Array.isArray(cashAdvances) ? cashAdvances : []) {
+            if (!c || !c.id || !(num(c.amount) > 0)) continue;
+
+            const [adv] = await conn.query(
+                "SELECT id FROM cash_advance_requests WHERE id = ? AND employee_id = ? AND status = 'Approved'",
+                [c.id, emp.id]
+            );
+            if (!adv.length) continue;
+
+            await conn.query(
+                `INSERT IGNORE INTO cash_advance_payments (advance_id, period_id, payslip_id, amount)
+                 VALUES (?, ?, ?, ?)`,
+                [c.id, period.id, result.insertId, num(c.amount)]
+            );
+        }
+
+        await conn.commit();
+
+        const [saved] = await conn.query('SELECT id, claimed_at FROM payslips WHERE id = ?', [result.insertId]);
         return res.status(201).json(saved[0]);
     } catch (err) {
+        await conn.rollback().catch(() => {});
         if (err.code === 'ER_DUP_ENTRY') {
             const [existing] = await db.query(
                 'SELECT id, claimed_at FROM payslips WHERE employee_id = ? AND period_id = ?',
@@ -53,95 +81,7 @@ router.post('/claim', async (req, res) => {
         }
         console.error('claim payslip failed:', err.code, err.message);
         return res.status(500).json({ error: 'Failed to save payslip' });
+    } finally {
+        conn.release();
     }
 });
-
-// Admin web: which employees are already claimed for a period
-router.get('/', async (req, res) => {
-    const { period_id } = req.query;
-    if (!period_id) return res.status(400).json({ error: 'period_id is required' });
-    try {
-        const [rows] = await db.query(
-            'SELECT id, employee_id, claimed_at FROM payslips WHERE period_id = ?',
-            [period_id]
-        );
-        return res.json(rows);
-    } catch (err) {
-        console.error(err.code, err.message);
-        return res.status(500).json({ error: 'Failed to load claims' });
-    }
-});
-
-// Admin web: every pay period that has saved payslips (feeds the Payslip tab dropdown).
-// NOTE: must stay above '/:id' or Express will treat "periods" as an id.
-router.get('/periods', async (req, res) => {
-    try {
-        const [rows] = await db.query(
-            `SELECT period_id,
-                    MAX(period_label)                          AS period_label,
-                    DATE_FORMAT(MIN(period_start), '%Y-%m-%d') AS period_start,
-                    DATE_FORMAT(MAX(period_end),   '%Y-%m-%d') AS period_end,
-                    COUNT(*)                                   AS employees,
-                    SUM(net_pay)                               AS total_net
-             FROM payslips
-             GROUP BY period_id
-             ORDER BY MIN(period_start) DESC, period_id DESC`
-        );
-        return res.json(rows);
-    } catch (err) {
-        console.error(err.code, err.message);
-        return res.status(500).json({ error: 'Failed to load periods' });
-    }
-});
-
-// Admin web: all saved payslips for one period (no heavy `details` JSON)
-router.get('/period/:periodId', async (req, res) => {
-    try {
-        const [rows] = await db.query(
-            `SELECT id, employee_id, employee_name, department, period_id, period_label,
-                    DATE_FORMAT(period_start, '%Y-%m-%d') AS period_start,
-                    DATE_FORMAT(period_end,   '%Y-%m-%d') AS period_end,
-                    salary_type, days_present, basic_pay, premium_pay, overtime_pay, allowance,
-                    gross_pay, sss, philhealth, pagibig, withholding_tax, cash_advance,
-                    total_deductions, net_pay, claimed_at
-             FROM payslips WHERE period_id = ? ORDER BY employee_name ASC`,
-            [req.params.periodId]
-        );
-        return res.json(rows);
-    } catch (err) {
-        console.error(err.code, err.message);
-        return res.status(500).json({ error: 'Failed to load payslips' });
-    }
-});
-
-// Flutter: list of an employee's payslips (newest first, no heavy details)
-router.get('/employee/:employeeId', async (req, res) => {
-    try {
-        const [rows] = await db.query(
-            `SELECT id, employee_id, employee_name, department, period_id, period_label,
-                    period_start, period_end, salary_type, days_present, basic_pay, premium_pay,
-                    overtime_pay, allowance, gross_pay, sss, philhealth, pagibig, withholding_tax,
-                    cash_advance, total_deductions, net_pay, claimed_at
-             FROM payslips WHERE employee_id = ? ORDER BY period_start DESC, id DESC`,
-            [req.params.employeeId]
-        );
-        return res.json(rows);
-    } catch (err) {
-        console.error(err.code, err.message);
-        return res.status(500).json({ error: 'Failed to load payslips' });
-    }
-});
-
-// Flutter + admin web: one payslip with the full breakdown ("how it's computed")
-router.get('/:id', async (req, res) => {
-    try {
-        const [rows] = await db.query('SELECT * FROM payslips WHERE id = ?', [req.params.id]);
-        if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
-        return res.json(rows[0]);
-    } catch (err) {
-        console.error(err.code, err.message);
-        return res.status(500).json({ error: 'Failed to load payslip' });
-    }
-});
-
-module.exports = router;

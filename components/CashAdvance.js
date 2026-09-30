@@ -22,6 +22,35 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/cash-advance/active?period_id=2026-08-2
+// Approved advances + installments already paid in OTHER periods.
+// (The current period is excluded so re-generating payroll never double counts.)
+// NOTE: must stay above '/:id' routes.
+router.get('/active', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT r.id, r.employee_id, r.amount, r.repayment_months,
+              (SELECT COUNT(*) FROM cash_advance_payments p
+                WHERE p.advance_id = r.id AND p.period_id <> ?) AS paid
+       FROM cash_advance_requests r
+       WHERE r.status = 'Approved'`,
+      [req.query.period_id || '']
+    );
+    res.json(
+      rows.map((r) => ({
+        id: r.id,
+        employee_id: r.employee_id,
+        amount: Number(r.amount),
+        repayment_months: Number(r.repayment_months),
+        paid: Number(r.paid),
+      }))
+    );
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to load active advances' });
+  }
+});
+
 // POST /api/cash-advance
 router.post('/', async (req, res) => {
   try {
@@ -32,11 +61,10 @@ router.post('/', async (req, res) => {
     if (!(amt > 0) || amt > MAX_AMOUNT)
       return res.status(400).json({ error: `Amount must be between 1 and ${MAX_AMOUNT}` });
 
-    // Name and department come from the database, not the client
     const [emp] = await pool.query('SELECT name, dept FROM employees WHERE id = ?', [employeeId]);
     if (!emp.length) return res.status(404).json({ error: 'Employee not found' });
 
-    const months = Math.min(Math.max(Number(repaymentMonths) || 1, 1), 12);
+    const months = Math.min(Math.max(Math.floor(Number(repaymentMonths)) || 1, 1), 12);
 
     const [pending] = await pool.query(
       "SELECT COUNT(*) AS c FROM cash_advance_requests WHERE employee_id = ? AND status = 'Pending'",
@@ -60,7 +88,6 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH /api/cash-advance/:id/status   (admin)  { status, remarks }
-// Only Pending requests can be approved or rejected.
 router.patch('/:id/status', async (req, res) => {
   try {
     const { status, remarks } = req.body;
@@ -96,7 +123,8 @@ router.patch('/:id/cancel', async (req, res) => {
   }
 });
 
-// DELETE /api/cash-advance/:id   (admin) - only Approved / Rejected / Cancelled
+// DELETE /api/cash-advance/:id   (admin) - only Approved / Rejected / Cancelled,
+// and never one that already has payroll deductions recorded.
 router.delete('/:id', async (req, res) => {
   try {
     const [r] = await pool.query(
@@ -106,6 +134,11 @@ router.delete('/:id', async (req, res) => {
       return res.status(409).json({ error: 'Not found, or the request is still pending' });
     res.json({ ok: true });
   } catch (e) {
+    if (e.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(409).json({
+        error: 'This advance already has payroll deductions recorded, so it cannot be deleted.',
+      });
+    }
     console.error(e);
     res.status(500).json({ error: 'Failed to delete' });
   }

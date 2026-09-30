@@ -77,3 +77,17 @@ CREATE TABLE IF NOT EXISTS payslips (
   UNIQUE KEY uq_employee_period (employee_id, period_id),
   INDEX idx_period (period_id)
 );
+
+
+CREATE TABLE IF NOT EXISTS cash_advance_payments (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  advance_id  INT NOT NULL,
+  period_id   VARCHAR(30) NOT NULL,
+  payslip_id  INT NULL,
+  amount      DECIMAL(12,2) NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_advance_period (advance_id, period_id),
+  INDEX idx_payslip (payslip_id),
+  CONSTRAINT fk_cap_advance FOREIGN KEY (advance_id)
+    REFERENCES cash_advance_requests(id) ON DELETE RESTRICT
+);
