@@ -60,14 +60,20 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH /api/cash-advance/:id/status   (admin)  { status, remarks }
+// Only Pending requests can be approved or rejected.
 router.patch('/:id/status', async (req, res) => {
   try {
     const { status, remarks } = req.body;
     if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+
     const [r] = await pool.query(
-      'UPDATE cash_advance_requests SET status = ?, admin_remarks = ?, reviewed_at = NOW() WHERE id = ?',
+      `UPDATE cash_advance_requests
+       SET status = ?, admin_remarks = ?, reviewed_at = NOW()
+       WHERE id = ? AND status = 'Pending'`,
       [status, remarks || null, req.params.id]);
-    if (!r.affectedRows) return res.status(404).json({ error: 'Not found' });
+
+    if (!r.affectedRows)
+      return res.status(409).json({ error: 'Request is no longer pending' });
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -87,6 +93,21 @@ router.patch('/:id/cancel', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to cancel' });
+  }
+});
+
+// DELETE /api/cash-advance/:id   (admin) - only Approved / Rejected / Cancelled
+router.delete('/:id', async (req, res) => {
+  try {
+    const [r] = await pool.query(
+      "DELETE FROM cash_advance_requests WHERE id = ? AND status <> 'Pending'",
+      [req.params.id]);
+    if (!r.affectedRows)
+      return res.status(409).json({ error: 'Not found, or the request is still pending' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to delete' });
   }
 });
 
