@@ -1,5 +1,4 @@
-// routes/employees.js
-// npm install bcryptjs
+
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../db');
@@ -26,7 +25,10 @@ router.post('/employee-login', (req, res) => {
                  FROM employees WHERE id = ? LIMIT 1`;
 
     db.query(sql, [id], async (err, rows) => {
-        if (err) return res.status(500).json({ error: "Server error. Please try again." });
+        if (err) {
+            console.error('employee-login DB error:', err);
+            return res.status(500).json({ error: "Server error. Please try again." });
+        }
 
         // Same message for "no such ID" and "wrong password" so IDs can't be guessed.
         const invalid = () => res.status(401).json({ error: "Invalid employee ID or password." });
