@@ -1,11 +1,74 @@
+// routes/employees.js
+// npm install bcryptjs
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const db = require('../db');
 
 const router = express.Router();
 
+// Columns safe to send to clients (never includes password_hash).
+const PUBLIC_COLUMNS = `id, name, dept, position, hired, status, rate, salaryType, payday,
+    birth, civil, contact, address, sss, philhealth, pagibig, tin, created_at`;
+
+// ---------------------------------------------------------------------------
+// EMPLOYEE APP LOGIN (used by the Flutter employee portal)
+// POST /employee-login  { id, password }  ->  { employee: {...} }
+// ---------------------------------------------------------------------------
+router.post('/employee-login', (req, res) => {
+    const id = String((req.body && req.body.id) || '').trim();
+    const password = String((req.body && req.body.password) || '');
+
+    if (!id || !password) {
+        return res.status(400).json({ error: "Employee ID and password are required." });
+    }
+
+    const sql = `SELECT id, name, dept, position, status, password_hash
+                 FROM employees WHERE id = ? LIMIT 1`;
+
+    db.query(sql, [id], async (err, rows) => {
+        if (err) return res.status(500).json({ error: "Server error. Please try again." });
+
+        // Same message for "no such ID" and "wrong password" so IDs can't be guessed.
+        const invalid = () => res.status(401).json({ error: "Invalid employee ID or password." });
+
+        if (rows.length === 0) return invalid();
+
+        const emp = rows[0];
+        if (!emp.password_hash) {
+            return res.status(403).json({ error: "No password set for this account. Please contact HR." });
+        }
+
+        const ok = await bcrypt.compare(password, emp.password_hash);
+        if (!ok) return invalid();
+
+        const { password_hash, ...employee } = emp;
+        return res.json({ employee });
+    });
+});
+
+// Admin sets or resets an employee's password.
+// PUT /employees/:id/password  { password }
+router.put('/employees/:id/password', async (req, res) => {
+    const password = String((req.body && req.body.password) || '');
+    if (password.length < 6) {
+        return res.status(400).json({ error: "Password must be at least 6 characters." });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    db.query("UPDATE employees SET password_hash = ? WHERE id = ?", [hash, req.params.id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (result.affectedRows === 0) return res.status(404).json({ error: "Employee not found." });
+        return res.json({ message: "Password updated." });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// ADMIN WEBSITE: employee CRUD
+// ---------------------------------------------------------------------------
+
 // GET all employees
 router.get('/employees', (req, res) => {
-    const sql = "SELECT * FROM employees ORDER BY created_at DESC";
+    const sql = `SELECT ${PUBLIC_COLUMNS} FROM employees ORDER BY created_at DESC`;
     db.query(sql, (err, data) => {
         if (err) return res.status(500).json({ error: err.message });
         return res.json(data);
