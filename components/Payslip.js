@@ -1,14 +1,10 @@
-// Paste this handler into your payslips router (routes/payslips.js).
-// It assumes the router file already has:
-//   const express = require('express');
-//   const db = require('../db').promise();
-//   const router = express.Router();
-//   const num = (v) => Number(v) || 0;   // helper used below
+const express = require('express');
+const db = require('../db').promise();   // same as routes/cashAdvance.js
+const router = express.Router();
 
 const num = (v) => Number(v) || 0;
 
 // Admin web: claim one payslip (saves a snapshot of the computed payroll)
-// and records each automatic cash advance installment taken in it.
 router.post('/claim', async (req, res) => {
     const { employeeId, period, row, breakdown, cashAdvances } = req.body || {};
     if (!employeeId || !period?.id || !row) {
@@ -48,8 +44,6 @@ router.post('/claim', async (req, res) => {
             details: JSON.stringify({ row, breakdown: breakdown || [] }),
         });
 
-        // Record each automatic cash advance installment taken in this payslip.
-        // Each advance is verified: it must exist, belong to this employee and be Approved.
         for (const c of Array.isArray(cashAdvances) ? cashAdvances : []) {
             if (!c || !c.id || !(num(c.amount) > 0)) continue;
 
@@ -85,3 +79,7 @@ router.post('/claim', async (req, res) => {
         conn.release();
     }
 });
+
+// KEEP your other existing routes here (e.g. GET '/' for ?period_id=..., and the ones the mobile app uses).
+
+module.exports = router;
