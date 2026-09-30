@@ -167,4 +167,20 @@ router.get('/:id', async (req, res) => {
     }
 });
 
+// GET /api/payslips/employee/:employeeId -> all claimed payslips of one employee, newest first (mobile app)
+router.get('/employee/:employeeId', async (req, res) => {
+    try {
+        const [rows] = await db.query(
+            `SELECT ${LIST_COLS} FROM payslips
+             WHERE employee_id = ?
+             ORDER BY period_start DESC, claimed_at DESC`,
+            [req.params.employeeId]
+        );
+        res.json(rows);
+    } catch (err) {
+        console.error('list employee payslips failed:', err.message);
+        res.status(500).json({ error: 'Failed to load payslips' });
+    }
+});
+
 module.exports = router;
