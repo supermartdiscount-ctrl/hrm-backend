@@ -72,6 +72,48 @@ router.get('/', async (req, res) => {
     }
 });
 
+// Admin web: every pay period that has saved payslips (feeds the Payslip tab dropdown).
+// NOTE: must stay above '/:id' or Express will treat "periods" as an id.
+router.get('/periods', async (req, res) => {
+    try {
+        const [rows] = await db.query(
+            `SELECT period_id,
+                    MAX(period_label)                          AS period_label,
+                    DATE_FORMAT(MIN(period_start), '%Y-%m-%d') AS period_start,
+                    DATE_FORMAT(MAX(period_end),   '%Y-%m-%d') AS period_end,
+                    COUNT(*)                                   AS employees,
+                    SUM(net_pay)                               AS total_net
+             FROM payslips
+             GROUP BY period_id
+             ORDER BY MIN(period_start) DESC, period_id DESC`
+        );
+        return res.json(rows);
+    } catch (err) {
+        console.error(err.code, err.message);
+        return res.status(500).json({ error: 'Failed to load periods' });
+    }
+});
+
+// Admin web: all saved payslips for one period (no heavy `details` JSON)
+router.get('/period/:periodId', async (req, res) => {
+    try {
+        const [rows] = await db.query(
+            `SELECT id, employee_id, employee_name, department, period_id, period_label,
+                    DATE_FORMAT(period_start, '%Y-%m-%d') AS period_start,
+                    DATE_FORMAT(period_end,   '%Y-%m-%d') AS period_end,
+                    salary_type, days_present, basic_pay, premium_pay, overtime_pay, allowance,
+                    gross_pay, sss, philhealth, pagibig, withholding_tax, cash_advance,
+                    total_deductions, net_pay, claimed_at
+             FROM payslips WHERE period_id = ? ORDER BY employee_name ASC`,
+            [req.params.periodId]
+        );
+        return res.json(rows);
+    } catch (err) {
+        console.error(err.code, err.message);
+        return res.status(500).json({ error: 'Failed to load payslips' });
+    }
+});
+
 // Flutter: list of an employee's payslips (newest first, no heavy details)
 router.get('/employee/:employeeId', async (req, res) => {
     try {
@@ -90,7 +132,7 @@ router.get('/employee/:employeeId', async (req, res) => {
     }
 });
 
-// Flutter: one payslip with the full breakdown ("how it's computed")
+// Flutter + admin web: one payslip with the full breakdown ("how it's computed")
 router.get('/:id', async (req, res) => {
     try {
         const [rows] = await db.query('SELECT * FROM payslips WHERE id = ?', [req.params.id]);
