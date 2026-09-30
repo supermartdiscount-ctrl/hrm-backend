@@ -42,7 +42,9 @@ router.post('/employee-login', (req, res) => {
         return res.status(400).json({ error: "Employee ID and password are required." });
     }
 
-    const sql = `SELECT id, name, dept, position, status, password_hash
+    // Profile fields shown on the app's Account page (password_hash is stripped below).
+    const sql = `SELECT id, name, dept, position, status, hired, birth, civil, contact,
+                        address, sss, philhealth, pagibig, tin, salaryType, password_hash
                  FROM employees WHERE id = ? LIMIT 1`;
 
     db.query(sql, [id], async (err, rows) => {
