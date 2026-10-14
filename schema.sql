@@ -1,7 +1,11 @@
 -- =====================================================================
--- FULL SCHEMA (already includes the new cash advance / credit changes)
--- Use this only on a NEW / empty `defaulthrm` database.
--- For your existing database, run 01_migration.sql instead.
+-- FULL SCHEMA for the `defaulthrm` database
+-- Includes all cash advance / credit / payslip changes.
+--
+-- Use this ONLY on a NEW / empty database.
+-- CREATE TABLE IF NOT EXISTS does NOT add missing columns to tables
+-- that already exist. For your existing database, run 01_migration.sql.
+--
 -- Every table has a PRIMARY KEY (required by DigitalOcean Managed MySQL).
 -- =====================================================================
 
@@ -39,17 +43,17 @@ CREATE TABLE IF NOT EXISTS employees (
 -- Cash advance requests. repayment_months is no longer used (HR types the
 -- deduction on each payroll); the column stays with default 1.
 CREATE TABLE IF NOT EXISTS cash_advance_requests (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  employee_id VARCHAR(50) NOT NULL,
-  employee_name VARCHAR(150) NOT NULL,
-  department VARCHAR(100) NULL,
-  amount DECIMAL(10,2) NOT NULL,
-  reason VARCHAR(500) NULL,
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  employee_id      VARCHAR(50)  NOT NULL,
+  employee_name    VARCHAR(150) NOT NULL,
+  department       VARCHAR(100) NULL,
+  amount           DECIMAL(10,2) NOT NULL,
+  reason           VARCHAR(500) NULL,
   repayment_months TINYINT NOT NULL DEFAULT 1,
-  status ENUM('Pending','Approved','Rejected','Cancelled') NOT NULL DEFAULT 'Pending',
-  admin_remarks VARCHAR(500) NULL,
-  date_requested TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  reviewed_at TIMESTAMP NULL,
+  status           ENUM('Pending','Approved','Rejected','Cancelled') NOT NULL DEFAULT 'Pending',
+  admin_remarks    VARCHAR(500) NULL,
+  date_requested   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at      TIMESTAMP NULL,
   INDEX idx_employee (employee_id),
   INDEX idx_status (status)
 );
@@ -76,7 +80,7 @@ CREATE TABLE IF NOT EXISTS payslips (
   pagibig          DECIMAL(12,2) NOT NULL DEFAULT 0,
   withholding_tax  DECIMAL(12,2) NOT NULL DEFAULT 0,
   cash_advance     DECIMAL(12,2) NOT NULL DEFAULT 0,
-  credit           DECIMAL(12,2) NOT NULL DEFAULT 0,   -- NEW: credit deduction
+  credit           DECIMAL(12,2) NOT NULL DEFAULT 0,   -- credit deduction
   total_deductions DECIMAL(12,2) NOT NULL DEFAULT 0,
   net_pay          DECIMAL(12,2) NOT NULL DEFAULT 0,
   details          JSON NULL,
@@ -151,14 +155,14 @@ CREATE TABLE IF NOT EXISTS credit_requests (
 CREATE TABLE IF NOT EXISTS credit_payments (
   id          INT AUTO_INCREMENT PRIMARY KEY,
   credit_id   INT NOT NULL,
-  period_id   VARCHAR(30) NULL,                        -- NEW
-  payslip_id  INT NULL,                                -- NEW
+  period_id   VARCHAR(30) NULL,
+  payslip_id  INT NULL,
   amount      DECIMAL(12,2) NOT NULL,
   note        VARCHAR(255) NULL,
   created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_credit_period (credit_id, period_id),  -- NEW (many NULLs allowed)
+  UNIQUE KEY uq_credit_period (credit_id, period_id),  -- many NULL periods are allowed
   INDEX idx_crp_credit (credit_id),
-  INDEX idx_crp_payslip (payslip_id),                  -- NEW
+  INDEX idx_crp_payslip (payslip_id),
   CONSTRAINT fk_crp_credit FOREIGN KEY (credit_id)
     REFERENCES credit_requests(id) ON DELETE RESTRICT
 );

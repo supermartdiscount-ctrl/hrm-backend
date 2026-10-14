@@ -100,7 +100,10 @@ router.get('/active', async (req, res) => {
         );
     } catch (e) {
         console.error('[Credit] active failed:', e.code, e.message);
-        res.status(500).json({ error: 'Failed to load active credits' });
+        res.status(500).json({
+            error: 'Failed to load active credits',
+            detail: `${e.code}: ${e.message}`,
+        });
     }
 });
 
