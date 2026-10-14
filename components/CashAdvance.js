@@ -53,25 +53,28 @@ router.get('/', async (req, res) => {
 router.get('/active', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT r.id, r.employee_id, r.amount,
-              r.amount - COALESCE((SELECT SUM(p.amount) FROM cash_advance_payments p
-                                   WHERE p.advance_id = r.id AND p.period_id <> ?), 0) AS balance
-       FROM cash_advance_requests r
-       WHERE r.status = 'Approved'
-       HAVING balance > 0`,
+      `SELECT t.id, t.employee_id, t.amount, t.balance
+       FROM (
+         SELECT r.id, r.employee_id, r.amount,
+                r.amount - COALESCE((SELECT SUM(p.amount) FROM cash_advance_payments p
+                                     WHERE p.advance_id = r.id AND p.period_id <> ?), 0) AS balance
+         FROM cash_advance_requests r
+         WHERE r.status = 'Approved'
+       ) t
+       WHERE t.balance > 0`,
       [req.query.period_id || '']
     );
     res.json(
       rows.map((r) => ({
         id: r.id,
-        employee_id: r.employee_id,
+        employee_id: String(r.employee_id),
         amount: Number(r.amount),
         balance: Number(r.balance),
         label: `CA-${r.id}`,
       }))
     );
   } catch (e) {
-    console.error(e);
+    console.error('[CA] active failed:', e.code, e.message);
     res.status(500).json({ error: 'Failed to load active advances' });
   }
 });

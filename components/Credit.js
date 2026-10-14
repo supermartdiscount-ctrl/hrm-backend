@@ -77,19 +77,22 @@ router.get('/', async (req, res) => {
 router.get('/active', async (req, res) => {
     try {
         const [rows] = await pool.query(
-            `SELECT r.id, r.employee_id, r.amount, r.category,
-                    r.amount - COALESCE((SELECT SUM(p.amount) FROM credit_payments p
-                                         WHERE p.credit_id = r.id
-                                           AND (p.period_id IS NULL OR p.period_id <> ?)), 0) AS balance
-             FROM credit_requests r
-             WHERE r.status = 'Approved'
-             HAVING balance > 0`,
+            `SELECT t.id, t.employee_id, t.amount, t.category, t.balance
+             FROM (
+               SELECT r.id, r.employee_id, r.amount, r.category,
+                      r.amount - COALESCE((SELECT SUM(p.amount) FROM credit_payments p
+                                           WHERE p.credit_id = r.id
+                                             AND (p.period_id IS NULL OR p.period_id <> ?)), 0) AS balance
+               FROM credit_requests r
+               WHERE r.status = 'Approved'
+             ) t
+             WHERE t.balance > 0`,
             [req.query.period_id || '']
         );
         res.json(
             rows.map((r) => ({
                 id: r.id,
-                employee_id: r.employee_id,
+                employee_id: String(r.employee_id),
                 amount: Number(r.amount),
                 balance: Number(r.balance),
                 label: `CR-${r.id} · ${r.category}`,
