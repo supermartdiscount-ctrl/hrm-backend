@@ -2,11 +2,14 @@
 -- FULL SCHEMA for the `defaulthrm` database
 -- Includes all cash advance / credit / payslip changes.
 --
--- Use this ONLY on a NEW / empty database.
--- CREATE TABLE IF NOT EXISTS does NOT add missing columns to tables
--- that already exist. For your existing database, run 01_migration.sql.
+-- Safe for a NEW database AND for your EXISTING database.
+-- CREATE TABLE IF NOT EXISTS skips tables that already exist, so the
+-- section at the very bottom adds any missing columns / keys to old
+-- tables. Each of those steps checks first, so running this many times
+-- is fine.
 --
 -- Every table has a PRIMARY KEY (required by DigitalOcean Managed MySQL).
+-- No semicolons inside comments (the runner splits statements on them).
 -- =====================================================================
 
 CREATE TABLE IF NOT EXISTS accounts (
@@ -166,3 +169,63 @@ CREATE TABLE IF NOT EXISTS credit_payments (
   CONSTRAINT fk_crp_credit FOREIGN KEY (credit_id)
     REFERENCES credit_requests(id) ON DELETE RESTRICT
 );
+
+-- =====================================================================
+-- UPGRADE EXISTING TABLES (adds only what is missing)
+-- =====================================================================
+
+-- credit_payments: link each payment to a payroll period and payslip
+SET @s = (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'credit_payments' AND COLUMN_NAME = 'period_id'),
+  'SELECT 1',
+  'ALTER TABLE credit_payments ADD COLUMN period_id VARCHAR(30) NULL AFTER credit_id'));
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @s = (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'credit_payments' AND COLUMN_NAME = 'payslip_id'),
+  'SELECT 1',
+  'ALTER TABLE credit_payments ADD COLUMN payslip_id INT NULL AFTER period_id'));
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @s = (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'credit_payments' AND COLUMN_NAME = 'note'),
+  'SELECT 1',
+  'ALTER TABLE credit_payments ADD COLUMN note VARCHAR(255) NULL AFTER amount'));
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @s = (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'credit_payments' AND INDEX_NAME = 'uq_credit_period'),
+  'SELECT 1',
+  'ALTER TABLE credit_payments ADD UNIQUE KEY uq_credit_period (credit_id, period_id)'));
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @s = (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'credit_payments' AND INDEX_NAME = 'idx_crp_payslip'),
+  'SELECT 1',
+  'ALTER TABLE credit_payments ADD INDEX idx_crp_payslip (payslip_id)'));
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- payslips: credit deduction column
+SET @s = (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'payslips' AND COLUMN_NAME = 'credit'),
+  'SELECT 1',
+  'ALTER TABLE payslips ADD COLUMN credit DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER cash_advance'));
+PREPARE stmt FROM @s;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

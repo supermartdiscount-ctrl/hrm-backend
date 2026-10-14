@@ -10,6 +10,46 @@ const CREDIT_LIMIT = 10000; // most an employee can owe at once (pending + unpai
 
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
+// Adds any missing columns / keys the credit + payroll features need, so an older
+// database works without running SQL by hand. Safe to run every start.
+const ensureReady = (async () => {
+    try {
+        const [cols] = await pool.query(
+            `SELECT TABLE_NAME AS t, COLUMN_NAME AS c FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('credit_payments', 'payslips')`
+        );
+        const [idx] = await pool.query(
+            `SELECT DISTINCT INDEX_NAME AS i FROM information_schema.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'credit_payments'`
+        );
+        const hasCol = (t, c) => cols.some((x) => x.t === t && x.c === c);
+        const hasIdx = (i) => idx.some((x) => x.i === i);
+        const run = async (label, sql) => {
+            try {
+                await pool.query(sql);
+                console.log('[Credit] schema fixed:', label);
+            } catch (e) {
+                console.error('[Credit] schema fix failed:', label, e.code, e.message);
+            }
+        };
+
+        if (!hasCol('credit_payments', 'period_id'))
+            await run('credit_payments.period_id', 'ALTER TABLE credit_payments ADD COLUMN period_id VARCHAR(30) NULL AFTER credit_id');
+        if (!hasCol('credit_payments', 'payslip_id'))
+            await run('credit_payments.payslip_id', 'ALTER TABLE credit_payments ADD COLUMN payslip_id INT NULL AFTER period_id');
+        if (!hasCol('credit_payments', 'note'))
+            await run('credit_payments.note', 'ALTER TABLE credit_payments ADD COLUMN note VARCHAR(255) NULL AFTER amount');
+        if (!hasIdx('uq_credit_period'))
+            await run('uq_credit_period', 'ALTER TABLE credit_payments ADD UNIQUE KEY uq_credit_period (credit_id, period_id)');
+        if (!hasIdx('idx_crp_payslip'))
+            await run('idx_crp_payslip', 'ALTER TABLE credit_payments ADD INDEX idx_crp_payslip (payslip_id)');
+        if (!hasCol('payslips', 'credit'))
+            await run('payslips.credit', 'ALTER TABLE payslips ADD COLUMN credit DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER cash_advance');
+    } catch (e) {
+        console.error('[Credit] schema check failed:', e.code, e.message);
+    }
+})();
+
 // Every credit + how much has been paid back so far.
 const PAID_JOIN = `
   SELECT r.*, COALESCE(p.paid_count, 0) AS paid_count, COALESCE(p.paid_amount, 0) AS paid_amount
@@ -76,6 +116,7 @@ router.get('/', async (req, res) => {
 // Manual payments (period_id IS NULL) always reduce the balance.
 router.get('/active', async (req, res) => {
     try {
+        await ensureReady;
         const [rows] = await pool.query(
             `SELECT t.id, t.employee_id, t.amount, t.category, t.balance
              FROM (
