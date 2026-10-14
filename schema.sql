@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS employees (
 );
 
 -- Cash advance requests. repayment_months is no longer used (HR types the
--- deduction on each payroll); the column stays with default 1.
+-- deduction on each payroll), the column stays with default 1.
 CREATE TABLE IF NOT EXISTS cash_advance_requests (
   id               INT AUTO_INCREMENT PRIMARY KEY,
   employee_id      VARCHAR(50)  NOT NULL,
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS leave_undertime_requests (
 );
 
 -- Employee store credit (category is Grocery, Produce or Meat).
--- repayment_months is no longer used; the column stays with default 1.
+-- repayment_months is no longer used, the column stays with default 1.
 CREATE TABLE IF NOT EXISTS credit_requests (
   id               INT AUTO_INCREMENT PRIMARY KEY,
   employee_id      VARCHAR(50)  NOT NULL,
