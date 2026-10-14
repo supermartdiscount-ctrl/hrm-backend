@@ -5,6 +5,8 @@ const accountRoutes = require('./components/Account');
 const employeeRoutes = require('./components/Employee');
 const cashAdvanceRoutes = require('./components/CashAdvance');
 const payslipRoutes = require('./components/Payslip');
+const leaveUndertimeRoutes = require('./components/LeaveUndertime');
+const creditRoutes = require('./components/Credit');
 
 const app = express();
 app.use(cors());
@@ -18,6 +20,8 @@ app.use(accountRoutes);
 app.use(employeeRoutes);
 app.use('/api/cash-advance', cashAdvanceRoutes);
 app.use('/api/payslips', payslipRoutes);
+app.use('/api/leave-undertime', leaveUndertimeRoutes);
+app.use('/api/credit', creditRoutes);
 
 const PORT = process.env.PORT || 8081;
 app.listen(PORT, () => {

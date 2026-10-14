@@ -91,3 +91,61 @@ CREATE TABLE IF NOT EXISTS cash_advance_payments (
   CONSTRAINT fk_cap_advance FOREIGN KEY (advance_id)
     REFERENCES cash_advance_requests(id) ON DELETE RESTRICT
 );
+
+-- NEW: leave and undertime requests (one table, request_type tells them apart)
+-- Leave uses leave_type / start_date / end_date / days.
+-- Undertime uses start_date (the day) / time_from / time_to / hours.
+CREATE TABLE IF NOT EXISTS leave_undertime_requests (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  employee_id     VARCHAR(50)  NOT NULL,
+  employee_name   VARCHAR(255) NOT NULL,
+  department      VARCHAR(100) NULL,
+  request_type    ENUM('Leave','Undertime') NOT NULL,
+  leave_type      VARCHAR(50)  NULL,
+  start_date      DATE NOT NULL,
+  end_date        DATE NULL,
+  days            DECIMAL(5,1) NULL,
+  time_from       TIME NULL,
+  time_to         TIME NULL,
+  hours           DECIMAL(5,2) NULL,
+  reason          VARCHAR(500) NULL,
+  status          ENUM('Pending','Approved','Rejected','Cancelled') NOT NULL DEFAULT 'Pending',
+  admin_remarks   VARCHAR(500) NULL,
+  date_requested  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at     TIMESTAMP NULL,
+  INDEX idx_lu_employee (employee_id),
+  INDEX idx_lu_status (status),
+  INDEX idx_lu_type_start (request_type, start_date)
+);
+
+
+-- NEW: employee store credit (type is Grocery, Produce or Meat)
+-- Payments are recorded against an approved credit until the balance reaches zero.
+CREATE TABLE IF NOT EXISTS credit_requests (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  employee_id      VARCHAR(50)  NOT NULL,
+  employee_name    VARCHAR(255) NOT NULL,
+  department       VARCHAR(100) NULL,
+  category         ENUM('Grocery','Produce','Meat') NOT NULL,
+  description      VARCHAR(255) NULL,
+  amount           DECIMAL(10,2) NOT NULL,
+  repayment_months TINYINT NOT NULL DEFAULT 1,
+  status           ENUM('Pending','Approved','Rejected','Cancelled') NOT NULL DEFAULT 'Pending',
+  admin_remarks    VARCHAR(500) NULL,
+  date_requested   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at      TIMESTAMP NULL,
+  INDEX idx_cr_employee (employee_id),
+  INDEX idx_cr_status (status),
+  INDEX idx_cr_category (category)
+);
+
+CREATE TABLE IF NOT EXISTS credit_payments (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  credit_id   INT NOT NULL,
+  amount      DECIMAL(12,2) NOT NULL,
+  note        VARCHAR(255) NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_crp_credit (credit_id),
+  CONSTRAINT fk_crp_credit FOREIGN KEY (credit_id)
+    REFERENCES credit_requests(id) ON DELETE RESTRICT
+);
