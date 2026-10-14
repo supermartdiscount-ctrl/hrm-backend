@@ -70,6 +70,37 @@ router.get('/', async (req, res) => {
     }
 });
 
+// GET /api/credit/active?period_id=2026-08-2
+// Approved credits that still have a balance. The balance ignores the payroll payment
+// of the period being generated, so re-generating payroll never double counts.
+// Manual payments (period_id IS NULL) always reduce the balance.
+router.get('/active', async (req, res) => {
+    try {
+        const [rows] = await pool.query(
+            `SELECT r.id, r.employee_id, r.amount, r.category,
+                    r.amount - COALESCE((SELECT SUM(p.amount) FROM credit_payments p
+                                         WHERE p.credit_id = r.id
+                                           AND (p.period_id IS NULL OR p.period_id <> ?)), 0) AS balance
+             FROM credit_requests r
+             WHERE r.status = 'Approved'
+             HAVING balance > 0`,
+            [req.query.period_id || '']
+        );
+        res.json(
+            rows.map((r) => ({
+                id: r.id,
+                employee_id: r.employee_id,
+                amount: Number(r.amount),
+                balance: Number(r.balance),
+                label: `CR-${r.id} · ${r.category}`,
+            }))
+        );
+    } catch (e) {
+        console.error('[Credit] active failed:', e.code, e.message);
+        res.status(500).json({ error: 'Failed to load active credits' });
+    }
+});
+
 // GET /api/credit/:id/payments -> payments received so far, oldest first
 router.get('/:id/payments', async (req, res) => {
     try {
@@ -77,10 +108,11 @@ router.get('/:id/payments', async (req, res) => {
         if (!id) return res.status(400).json({ error: 'Invalid credit id' });
 
         const [rows] = await pool.query(
-            `SELECT id, amount, note, created_at
-             FROM credit_payments
-             WHERE credit_id = ?
-             ORDER BY created_at ASC, id ASC`,
+            `SELECT p.id, p.period_id, p.amount, p.note, p.created_at, s.period_label
+             FROM credit_payments p
+             LEFT JOIN payslips s ON s.id = p.payslip_id
+             WHERE p.credit_id = ?
+             ORDER BY p.created_at ASC, p.id ASC`,
             [id]
         );
         res.json(rows.map((r) => ({ ...r, amount: Number(r.amount) })));
@@ -90,10 +122,10 @@ router.get('/:id/payments', async (req, res) => {
     }
 });
 
-// POST /api/credit   { employeeId, category, amount, description, repaymentMonths }
+// POST /api/credit   { employeeId, category, amount, description }
 router.post('/', async (req, res) => {
     try {
-        const { employeeId, category, amount, description, repaymentMonths } = req.body || {};
+        const { employeeId, category, amount, description } = req.body || {};
         const amt = round2(amount);
 
         if (!employeeId) return res.status(400).json({ error: 'Employee required' });
@@ -106,8 +138,6 @@ router.post('/', async (req, res) => {
 
         const [emp] = await pool.query('SELECT name, dept FROM employees WHERE id = ?', [employeeId]);
         if (!emp.length) return res.status(404).json({ error: 'Employee not found' });
-
-        const months = Math.min(Math.max(Math.floor(Number(repaymentMonths)) || 1, 1), 12);
 
         // What this employee already owes: pending requests + unpaid part of approved ones.
         const [owed] = await pool.query(
@@ -130,10 +160,11 @@ router.post('/', async (req, res) => {
             });
         }
 
+        // repayment_months is no longer used; the column default (1) is kept.
         const [result] = await pool.query(
             `INSERT INTO credit_requests
-             (employee_id, employee_name, department, category, description, amount, repayment_months)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+             (employee_id, employee_name, department, category, description, amount)
+             VALUES (?, ?, ?, ?, ?, ?)`,
             [
                 employeeId,
                 emp[0].name,
@@ -141,7 +172,6 @@ router.post('/', async (req, res) => {
                 category,
                 (description || '').slice(0, 255),
                 amt,
-                months,
             ]
         );
 
@@ -196,7 +226,8 @@ router.patch('/:id/cancel', async (req, res) => {
 });
 
 // POST /api/credit/:id/payments   (admin)  { amount, note? }
-// Records money received against an approved credit. Cannot exceed the balance.
+// Records a manual payment (e.g. cash) against an approved credit. Cannot exceed the balance.
+// Payroll deductions are saved by POST /api/payslips/claim instead.
 router.post('/:id/payments', async (req, res) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid credit id' });

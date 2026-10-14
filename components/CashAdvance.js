@@ -14,19 +14,19 @@ const PAID_JOIN = `
     FROM cash_advance_payments GROUP BY advance_id
   ) p ON p.advance_id = r.id`;
 
-// Adds balance / is_paid. "Paid" = Approved and every installment was deducted.
+// Adds balance / is_paid. "Paid" = Approved and nothing left to pay.
+// Deductions are entered by HR / accountant on each payroll, so there is no term check.
 const withBalance = (r) => {
   const amount = Number(r.amount);
   const paidAmount = Number(r.paid_amount);
   const paidCount = Number(r.paid_count);
   const balance = Math.max(0, +(amount - paidAmount).toFixed(2));
-  const isPaid =
-    r.status === 'Approved' && (balance <= 0 || paidCount >= Number(r.repayment_months));
+  const isPaid = r.status === 'Approved' && balance <= 0;
   return {
     ...r,
     paid_count: paidCount,
     paid_amount: paidAmount,
-    balance: isPaid ? 0 : balance,
+    balance,
     is_paid: isPaid,
   };
 };
@@ -47,17 +47,18 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/cash-advance/active?period_id=2026-08-2
-// Approved advances + installments already paid in OTHER periods.
-// (The current period is excluded so re-generating payroll never double counts.)
+// Approved advances that still have a balance. The balance ignores the payment of
+// the period being generated, so re-generating payroll never double counts.
 // NOTE: must stay above '/:id' routes.
 router.get('/active', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT r.id, r.employee_id, r.amount, r.repayment_months,
-              (SELECT COUNT(*) FROM cash_advance_payments p
-                WHERE p.advance_id = r.id AND p.period_id <> ?) AS paid
+      `SELECT r.id, r.employee_id, r.amount,
+              r.amount - COALESCE((SELECT SUM(p.amount) FROM cash_advance_payments p
+                                   WHERE p.advance_id = r.id AND p.period_id <> ?), 0) AS balance
        FROM cash_advance_requests r
-       WHERE r.status = 'Approved'`,
+       WHERE r.status = 'Approved'
+       HAVING balance > 0`,
       [req.query.period_id || '']
     );
     res.json(
@@ -65,8 +66,8 @@ router.get('/active', async (req, res) => {
         id: r.id,
         employee_id: r.employee_id,
         amount: Number(r.amount),
-        repayment_months: Number(r.repayment_months),
-        paid: Number(r.paid),
+        balance: Number(r.balance),
+        label: `CA-${r.id}`,
       }))
     );
   } catch (e) {
@@ -93,10 +94,10 @@ router.get('/:id/payments', async (req, res) => {
   }
 });
 
-// POST /api/cash-advance
+// POST /api/cash-advance   { employeeId, amount, reason }
 router.post('/', async (req, res) => {
   try {
-    const { employeeId, amount, reason, repaymentMonths } = req.body;
+    const { employeeId, amount, reason } = req.body;
     const amt = Number(amount);
 
     if (!employeeId) return res.status(400).json({ error: 'Employee required' });
@@ -106,19 +107,18 @@ router.post('/', async (req, res) => {
     const [emp] = await pool.query('SELECT name, dept FROM employees WHERE id = ?', [employeeId]);
     if (!emp.length) return res.status(404).json({ error: 'Employee not found' });
 
-    const months = Math.min(Math.max(Math.floor(Number(repaymentMonths)) || 1, 1), 12);
-
     const [pending] = await pool.query(
       "SELECT COUNT(*) AS c FROM cash_advance_requests WHERE employee_id = ? AND status = 'Pending'",
       [employeeId]);
     if (pending[0].c >= 1)
       return res.status(409).json({ error: 'You already have a pending request' });
 
+    // repayment_months is no longer used; the column default (1) is kept.
     const [result] = await pool.query(
       `INSERT INTO cash_advance_requests
-       (employee_id, employee_name, department, amount, reason, repayment_months)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [employeeId, emp[0].name, emp[0].dept || null, amt, (reason || '').slice(0, 500), months]);
+       (employee_id, employee_name, department, amount, reason)
+       VALUES (?, ?, ?, ?, ?)`,
+      [employeeId, emp[0].name, emp[0].dept || null, amt, (reason || '').slice(0, 500)]);
 
     const [rows] = await pool.query(
       'SELECT * FROM cash_advance_requests WHERE id = ?', [result.insertId]);
@@ -167,7 +167,7 @@ router.patch('/:id/cancel', async (req, res) => {
 
 // DELETE /api/cash-advance/:id   (admin)
 // Allowed: Rejected, Cancelled, or Approved + fully Paid.
-// Blocked: Pending, and Approved advances that are still being repaid.
+// Blocked: Pending, and Approved advances that still have a balance.
 router.delete('/:id', async (req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -178,7 +178,7 @@ router.delete('/:id', async (req, res) => {
     if (r.status === 'Pending')
       return res.status(409).json({ error: 'The request is still pending' });
     if (r.status === 'Approved' && !r.is_paid)
-      return res.status(409).json({ error: 'This advance is still being repaid, so it cannot be deleted.' });
+      return res.status(409).json({ error: 'This advance still has a balance, so it cannot be deleted.' });
 
     await conn.beginTransaction();
     // Payslips keep their own saved snapshot, so removing the payment rows is safe.

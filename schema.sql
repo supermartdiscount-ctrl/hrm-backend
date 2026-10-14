@@ -1,5 +1,9 @@
--- Run this against the `defaulthrm` database on DigitalOcean.
+-- =====================================================================
+-- FULL SCHEMA (already includes the new cash advance / credit changes)
+-- Use this only on a NEW / empty `defaulthrm` database.
+-- For your existing database, run 01_migration.sql instead.
 -- Every table has a PRIMARY KEY (required by DigitalOcean Managed MySQL).
+-- =====================================================================
 
 CREATE TABLE IF NOT EXISTS accounts (
     id          INT AUTO_INCREMENT PRIMARY KEY,
@@ -32,6 +36,8 @@ CREATE TABLE IF NOT EXISTS employees (
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Cash advance requests. repayment_months is no longer used (HR types the
+-- deduction on each payroll); the column stays with default 1.
 CREATE TABLE IF NOT EXISTS cash_advance_requests (
   id INT AUTO_INCREMENT PRIMARY KEY,
   employee_id VARCHAR(50) NOT NULL,
@@ -48,7 +54,7 @@ CREATE TABLE IF NOT EXISTS cash_advance_requests (
   INDEX idx_status (status)
 );
 
--- NEW: claimed payslips (one per employee per pay period)
+-- Claimed payslips (one per employee per pay period)
 CREATE TABLE IF NOT EXISTS payslips (
   id               INT AUTO_INCREMENT PRIMARY KEY,
   employee_id      VARCHAR(50)  NOT NULL,
@@ -70,6 +76,7 @@ CREATE TABLE IF NOT EXISTS payslips (
   pagibig          DECIMAL(12,2) NOT NULL DEFAULT 0,
   withholding_tax  DECIMAL(12,2) NOT NULL DEFAULT 0,
   cash_advance     DECIMAL(12,2) NOT NULL DEFAULT 0,
+  credit           DECIMAL(12,2) NOT NULL DEFAULT 0,   -- NEW: credit deduction
   total_deductions DECIMAL(12,2) NOT NULL DEFAULT 0,
   net_pay          DECIMAL(12,2) NOT NULL DEFAULT 0,
   details          JSON NULL,
@@ -78,7 +85,8 @@ CREATE TABLE IF NOT EXISTS payslips (
   INDEX idx_period (period_id)
 );
 
-
+-- One row per cash advance deduction taken in a claimed payslip.
+-- Balance = request amount - SUM(amount) of these rows.
 CREATE TABLE IF NOT EXISTS cash_advance_payments (
   id          INT AUTO_INCREMENT PRIMARY KEY,
   advance_id  INT NOT NULL,
@@ -92,7 +100,7 @@ CREATE TABLE IF NOT EXISTS cash_advance_payments (
     REFERENCES cash_advance_requests(id) ON DELETE RESTRICT
 );
 
--- NEW: leave and undertime requests (one table, request_type tells them apart)
+-- Leave and undertime requests (one table, request_type tells them apart)
 -- Leave uses leave_type / start_date / end_date / days.
 -- Undertime uses start_date (the day) / time_from / time_to / hours.
 CREATE TABLE IF NOT EXISTS leave_undertime_requests (
@@ -118,9 +126,8 @@ CREATE TABLE IF NOT EXISTS leave_undertime_requests (
   INDEX idx_lu_type_start (request_type, start_date)
 );
 
-
--- NEW: employee store credit (type is Grocery, Produce or Meat)
--- Payments are recorded against an approved credit until the balance reaches zero.
+-- Employee store credit (category is Grocery, Produce or Meat).
+-- repayment_months is no longer used; the column stays with default 1.
 CREATE TABLE IF NOT EXISTS credit_requests (
   id               INT AUTO_INCREMENT PRIMARY KEY,
   employee_id      VARCHAR(50)  NOT NULL,
@@ -139,13 +146,19 @@ CREATE TABLE IF NOT EXISTS credit_requests (
   INDEX idx_cr_category (category)
 );
 
+-- Credit payments: from payroll (period_id + payslip_id set) or manual
+-- payments such as cash (period_id NULL). Balance = credit amount - SUM(amount).
 CREATE TABLE IF NOT EXISTS credit_payments (
   id          INT AUTO_INCREMENT PRIMARY KEY,
   credit_id   INT NOT NULL,
+  period_id   VARCHAR(30) NULL,                        -- NEW
+  payslip_id  INT NULL,                                -- NEW
   amount      DECIMAL(12,2) NOT NULL,
   note        VARCHAR(255) NULL,
   created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_credit_period (credit_id, period_id),  -- NEW (many NULLs allowed)
   INDEX idx_crp_credit (credit_id),
+  INDEX idx_crp_payslip (payslip_id),                  -- NEW
   CONSTRAINT fk_crp_credit FOREIGN KEY (credit_id)
     REFERENCES credit_requests(id) ON DELETE RESTRICT
 );

@@ -10,7 +10,7 @@ const LIST_COLS = `
   DATE_FORMAT(period_start, '%Y-%m-%d') AS period_start,
   DATE_FORMAT(period_end,   '%Y-%m-%d') AS period_end,
   salary_type, days_present, basic_pay, premium_pay, overtime_pay, allowance,
-  gross_pay, sss, philhealth, pagibig, withholding_tax, cash_advance,
+  gross_pay, sss, philhealth, pagibig, withholding_tax, cash_advance, credit,
   total_deductions, net_pay, claimed_at`;
 
 // GET /api/payslips/periods -> saved pay periods (newest first) for the Payslips page dropdown
@@ -72,9 +72,10 @@ router.get('/', async (req, res) => {
 });
 
 // Admin web: claim one payslip (saves a snapshot of the computed payroll)
-// and records each automatic cash advance installment taken in it.
+// and records each cash advance / credit deduction entered by HR for this payroll.
+//   cashAdvances: [{ id, amount, ... }]   credits: [{ id, amount, ... }]
 router.post('/claim', async (req, res) => {
-    const { employeeId, period, row, breakdown, cashAdvances } = req.body || {};
+    const { employeeId, period, row, breakdown, cashAdvances, credits } = req.body || {};
     if (!employeeId || !period?.id || !row) {
         return res.status(400).json({ error: 'employeeId, period and row are required' });
     }
@@ -107,23 +108,58 @@ router.post('/claim', async (req, res) => {
             pagibig: num(row.pagibig?.ee),
             withholding_tax: num(row.periodTax),
             cash_advance: num(row.cashAdvance),
+            credit: num(row.credit),
             total_deductions: num(row.totalDeductions),
             net_pay: num(row.netPay),
             details: JSON.stringify({ row, breakdown: breakdown || [] }),
         });
 
+        // Cash advance deductions (HR-entered amounts, never more than the balance).
         for (const c of Array.isArray(cashAdvances) ? cashAdvances : []) {
             if (!c || !c.id || !(num(c.amount) > 0)) continue;
 
+            // Balance before this payroll (payments of OTHER periods only). Lock the row.
             const [adv] = await conn.query(
-                "SELECT id FROM cash_advance_requests WHERE id = ? AND employee_id = ? AND status = 'Approved'",
-                [c.id, emp.id]
+                `SELECT r.amount - COALESCE((SELECT SUM(p.amount) FROM cash_advance_payments p
+                                             WHERE p.advance_id = r.id AND p.period_id <> ?), 0) AS balance
+                 FROM cash_advance_requests r
+                 WHERE r.id = ? AND r.employee_id = ? AND r.status = 'Approved'
+                 FOR UPDATE`,
+                [period.id, c.id, emp.id]
             );
             if (!adv.length) continue;
+            if (num(c.amount) > Number(adv[0].balance) + 0.001) {
+                throw Object.assign(new Error('Cash advance deduction is more than the balance'), { http: 400 });
+            }
 
             await conn.query(
                 `INSERT IGNORE INTO cash_advance_payments (advance_id, period_id, payslip_id, amount)
                  VALUES (?, ?, ?, ?)`,
+                [c.id, period.id, result.insertId, num(c.amount)]
+            );
+        }
+
+        // Credit deductions (same rule). Manual payments (period_id NULL) count toward the balance.
+        for (const c of Array.isArray(credits) ? credits : []) {
+            if (!c || !c.id || !(num(c.amount) > 0)) continue;
+
+            const [cr] = await conn.query(
+                `SELECT r.amount - COALESCE((SELECT SUM(p.amount) FROM credit_payments p
+                                             WHERE p.credit_id = r.id
+                                               AND (p.period_id IS NULL OR p.period_id <> ?)), 0) AS balance
+                 FROM credit_requests r
+                 WHERE r.id = ? AND r.employee_id = ? AND r.status = 'Approved'
+                 FOR UPDATE`,
+                [period.id, c.id, emp.id]
+            );
+            if (!cr.length) continue;
+            if (num(c.amount) > Number(cr[0].balance) + 0.001) {
+                throw Object.assign(new Error('Credit deduction is more than the balance'), { http: 400 });
+            }
+
+            await conn.query(
+                `INSERT IGNORE INTO credit_payments (credit_id, period_id, payslip_id, amount, note)
+                 VALUES (?, ?, ?, ?, 'Payroll deduction')`,
                 [c.id, period.id, result.insertId, num(c.amount)]
             );
         }
@@ -134,6 +170,7 @@ router.post('/claim', async (req, res) => {
         return res.status(201).json(saved[0]);
     } catch (err) {
         await conn.rollback().catch(() => {});
+        if (err.http) return res.status(err.http).json({ error: err.message });
         if (err.code === 'ER_DUP_ENTRY') {
             const [existing] = await db.query(
                 'SELECT id, claimed_at FROM payslips WHERE employee_id = ? AND period_id = ?',
